@@ -18,6 +18,7 @@ from iss_simple_client import MicexAuth
 from iss_simple_client import MicexISSClient
 from iss_simple_client import MicexISSDataHandler
 
+SEC = 'RIH8'
 
 class MyData:
     """ Container that will be used by the handler to store data.
@@ -28,12 +29,30 @@ class MyData:
         self.history = []
 
     def print_history(self):
-        print "=" * 49
-        print "|%15s|%15s|%15s|" % ("SECID", "CLOSE", "TRADES")
-        print "=" * 49
+        print("=" * 49)
+        print("|%15s|%15s|%15s|" % ("SECID", "CLOSE", "TRADES"))
+        print("=" * 49)
         for sec in self.history:
-            print "|%15s|%15.2f|%15d|" % (sec[0], sec[1], sec[2])
-        print "=" * 49
+            print("|%15s|%15.2f|%15d|" % (sec[0], sec[1], sec[2]))
+        print("=" * 49)
+
+    def print_trades( self ):
+        print("=" * 49)
+        print("|%15s|%15s|%15s|" % ("SYSTIME", "PRICE", "QUANTITY"))
+        print("=" * 49)
+        for sec in self.history:
+            print("|%15s|%15.2f|%15d|" % (sec[0], sec[1], sec[2]))
+        print("=" * 49)
+
+        fname = '%s %s.txt' % ( SEC, self.history[-1][0] )
+        #removing ':' from name
+        fname = fname.translate( str.maketrans( '', '', ':' ) )
+
+        f = open( fname, 'w' )
+        for sec in self.history:
+            f.write( '%s\t%s\t%s\n' % (sec[0], sec[1], sec[2]) )
+        f.close()
+
 
 
 class MyDataHandler(MicexISSDataHandler):
@@ -48,18 +67,34 @@ class MyDataHandler(MicexISSDataHandler):
 
 
 def main():
-    my_config = Config(user='username', password='password', proxy_url='')
+    my_config = Config( user='', password='', proxy_url='' )
     my_auth = MicexAuth(my_config)
     if my_auth.is_real_time():
-        iss = MicexISSClient(my_config, my_auth, MyDataHandler, MyData)
-        iss.get_history_securities('stock',
-                                   'shares',
-                                   'eqne',
-                                   '2010-04-29')
-        iss.handler.data.print_history()
+        iss = MicexISSClient(my_config, MyDataHandler, MyData, auth = my_auth )
+    else:
+        iss = MicexISSClient(my_config, MyDataHandler, MyData, auth = None )
+
+    """
+    iss.get_history_securities('futures', # see http://iss.moex.com/iss/engines.xml
+                                'index', # see http://iss.moex.com/iss/engines/stock/markets.xml
+                                'RTSI', # http://iss.moex.com/iss/engines/stock/markets/index/boards.xml
+                                '2018-01-19'
+                               )
+    iss.handler.data.print_history()
+    """
+    iss.get_security_trades('futures', # see http://iss.moex.com/iss/engines.xml
+                            'forts', # see http://iss.moex.com/iss/engines/stock/markets.xml
+                            'RIH8', # http://iss.moex.com/iss/engines/stock/markets/index/boards.xml
+                            True,
+                            200
+                            )
+    iss.handler.data.print_trades()
+    
+    #else:
+    #    print( 'not real time' )
 
 if __name__ == '__main__':
-    try:
-        main()
-    except:
-        print "Sorry:", sys.exc_type, ":", sys.exc_value
+    #try:
+    main()
+    #except:
+    #    print("Sorry:", sys.exc_info()[0], ":", sys.exc_info()[1])
