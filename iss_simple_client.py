@@ -12,10 +12,12 @@ import urllib.request, urllib.error, urllib.parse
 import base64
 import http.cookiejar
 import json
+import time
 
 
 requests = {'history_secs': 'http://iss.moex.com/iss/history/engines/%(engine)s/markets/%(market)s/boards/%(board)s/securities.json?date=%(date)s',
-            'sec_trades': 'https://iss.moex.com/iss/engines/%(engine)s/markets/%(market)s/securities/%(sec)s/trades.json?reversed=%(reversed)d&limit=%(limit)d' }
+            'sec_trades': 'https://iss.moex.com/iss/engines/%(engine)s/markets/%(market)s/securities/%(sec)s/trades.json?previous_session=%(previous_session)d&limit=%(limit)d&reversed=%(reversed)d',
+            'sec_trades1': 'https://iss.moex.com/iss/engines/%(engine)s/markets/%(market)s/securities/%(sec)s/trades.json?previous_session=%(previous_session)d&tradeno=%(tradeno)d&limit=%(limit)d'}
 # futures, forts, RTSI, RIH8
 # http://iss.moex.com/iss/securities.xml?q=RI
 
@@ -181,14 +183,14 @@ class MicexISSClient:
             start = start + cnt
         return True
 
-    def get_security_trades( self, engine, market, security, isReversed, limit ):
+    def get_security_trades( self, engine, market, security, prevSession, isReversed, limit ):
         """ Get and parse historical data on all the securities at the
         given engine, market, board
         """
         url = requests['sec_trades'] % {'engine': engine,
                                         'market': market,
                                         'sec': security,
-                                        'reversed': int(isReversed),
+                                        'previous_session': prevSession,
                                         'limit': limit }
 
         print(url)
@@ -233,6 +235,159 @@ class MicexISSClient:
         # in order to be able to handle large volumes of data
         # and to start data processing without waiting for
         # the complete reply
+        self.handler.do( result )
+        
+        return True
+
+    def get_session_start_end_tradenos( self, engine, market, security, prevSession ):
+        url = requests['sec_trades'] % {'engine': engine,
+                                        'market': market,
+                                        'sec': security,
+                                        'previous_session': prevSession,
+                                        'reversed': 0,
+                                        'limit': 1 }
+
+        #print( url )
+        res = self.opener.open( url )
+        resStr = str( res.read().decode('utf-8') )
+        jres = json.loads( resStr )
+
+        # the following is also just a simple example
+        # it is recommended to keep metadata separately
+            
+        jhist = jres['trades']
+        jdata = jhist['data']
+
+        if len( jdata ) == 0:
+            raise ValueError( 'Can\'t get session start tradeno' )
+        
+        jcols = jhist['columns']
+            
+        sessionStartTradeNo = int( del_null( jdata[0][ jcols.index( 'TRADENO' ) ] ) )
+
+        print( 'session start time:', jdata[0][ jcols.index( 'SYSTIME' ) ] )
+
+        if prevSession == 0:
+            url = requests['sec_trades'] % {'engine': engine,
+                                            'market': market,
+                                            'sec': security,
+                                            'previous_session': prevSession,
+                                            'reversed': 1,
+                                            'limit': 1 }
+
+            res = self.opener.open( url )
+            resStr = str( res.read().decode('utf-8') )
+            jres = json.loads( resStr )
+
+            # the following is also just a simple example
+            # it is recommended to keep metadata separately
+                    
+            jhist = jres['trades']
+            jdata = jhist['data']
+
+            if len( jdata ) == 0:
+                raise ValueError( 'Can\'t get session end tradeno' )
+                
+            jcols = jhist['columns']
+
+            sessionEndTradeNo = int( del_null( jdata[0][ jcols.index( 'TRADENO' ) ] ) )
+
+            print( 'session end time:', jdata[0][ jcols.index( 'SYSTIME' ) ] )
+        else:
+            url = requests['sec_trades'] % {'engine': engine,
+                                            'market': market,
+                                            'sec': security,
+                                            'previous_session': ( prevSession - 1 ),
+                                            'reversed': 1,
+                                            'limit': 1 }
+
+            res = self.opener.open( url )
+            resStr = str( res.read().decode('utf-8') )
+            jres = json.loads( resStr )
+
+            # the following is also just a simple example
+            # it is recommended to keep metadata separately
+                    
+            jhist = jres['trades']
+            jdata = jhist['data']
+
+            if len( jdata ) == 0:
+                raise ValueError( 'Can\'t get session end tradeno' )
+                
+            jcols = jhist['columns']
+
+            sessionEndTradeNo = int( del_null( jdata[0][ jcols.index( 'TRADENO' ) ] ) ) - 1
+        
+        return ( sessionStartTradeNo, sessionEndTradeNo )
+        
+
+    # prev_session = 0 means the current session
+    # -----||----- = n means number of the previous session before current one
+    def get_trades_for_session( self, engine, market, security, prevSession ):
+        startTradeNo, endTradeNo = self.get_session_start_end_tradenos( engine, market, security, prevSession )
+
+        result = []
+        currTradeNo = startTradeNo
+        while currTradeNo <= endTradeNo:
+            print( currTradeNo )
+            url = requests['sec_trades1'] % {'engine': engine,
+                                                'market': market,
+                                                'sec': security,
+                                                'previous_session': prevSession,
+                                                'tradeno': currTradeNo,
+                                                'limit': 5000 }
+
+
+            # always remember about the 'start' argument to get long replies
+
+            res = self.opener.open( url )
+            resStr = str( res.read().decode('utf-8') )
+            #print( resStr )
+            #if resStr == '':
+            #    break
+            #jres = json.load(res)
+            jres = json.loads( resStr )
+
+            # the following is also just a simple example
+            # it is recommended to keep metadata separately
+
+            # root node with historical data
+            # see json response structure here:
+            # https://iss.moex.com/iss/engines/futures/markets/forts/securities/RIH8/trades.json?reversed=1&limit=10
+                
+            jhist = jres['trades']
+
+            # node with actual data
+            jdata = jhist['data']
+
+            if len( jdata ) == 0:
+                break
+
+            # node with the list of column IDs in 'data' in correct order;
+            # it's also possible to use the iss.json=extended argument instead
+            # to get all the IDs together with data (leads to more traffic)
+            jcols = jhist['columns']
+            timeIdx = jcols.index('SYSTIME')
+            priceIdx = jcols.index('PRICE')
+            qtyIdx = jcols.index('QUANTITY')
+            tradenoIdx = jcols.index( 'TRADENO' )    
+
+            chunk = []
+            for trade in jdata:
+                dtime = time.strptime( trade[timeIdx] + '+0300', '%Y-%m-%d %H:%M:%S%z' )
+                timeEpoch = int( time.mktime( dtime ) )
+                chunk.append( ( timeEpoch,
+                                float( del_null( trade[priceIdx] ) ),
+                                int( del_null( trade[qtyIdx] ) ),
+                                int( del_null( trade[tradenoIdx] ) ) ) )
+            # we return pieces of received data on each iteration
+            # in order to be able to handle large volumes of data
+            # and to start data processing without waiting for
+            # the complete reply
+            result += chunk
+
+            currTradeNo = int( del_null( jdata[-1][ tradenoIdx ] ) ) + 1
+            
         self.handler.do( result )
         
         return True
