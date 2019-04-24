@@ -12,7 +12,7 @@
     @copyright: 2016 by MOEX
 """
 
-import sys
+import sys, time
 from iss_simple_client import Config
 from iss_simple_client import MicexAuth
 from iss_simple_client import MicexISSClient
@@ -41,16 +41,26 @@ class MyData:
         print("|%15s|%15s|%15s|" % ("SYSTIME", "PRICE", "QUANTITY"))
         print("=" * 49)
         for sec in self.history:
-            print("|%15s|%15.2f|%15d|" % (sec[0], sec[1], sec[2]))
+            print("|%15s|%15.2f|%15d|" % ( time.strftime( '%Y-%m-%d %H:%M:%S%z', time.localtime( sec[0] ) ),
+                                          sec[1], sec[2]) )
         print("=" * 49)
 
-        fname = '%s %s.txt' % ( SEC, self.history[-1][0] )
+
+    def store_trades( self ):
+        zeroTime = self.history[0][0]
+        endTime = self.history[-1][0]
+
+        print( time.strftime( '%Y-%m-%d %H:%M:%S%z', time.localtime( zeroTime ) ) )
+        print( time.strftime( '%Y-%m-%d %H:%M:%S%z', time.localtime( endTime ) ) )
+        
+        fname = '%s %s.txt' % ( SEC, time.strftime( '%d%m%y %H-%M-%S%z', time.localtime( zeroTime ) ) )
         #removing ':' from name
         fname = fname.translate( str.maketrans( '', '', ':' ) )
 
         f = open( fname, 'w' )
+        f.write( 'zeroTime: %d\n' % zeroTime )
         for sec in self.history:
-            f.write( '%s\t%s\t%s\n' % (sec[0], sec[1], sec[2]) )
+            f.write( '%d\t%.0f\t%d\n' % ( sec[0] - zeroTime, sec[1], sec[2] ) )
         f.close()
 
 
@@ -82,13 +92,36 @@ def main():
                                )
     iss.handler.data.print_history()
     """
+    """
     iss.get_security_trades('futures', # see http://iss.moex.com/iss/engines.xml
                             'forts', # see http://iss.moex.com/iss/engines/stock/markets.xml
                             'RIH8', # http://iss.moex.com/iss/engines/stock/markets/index/boards.xml
-                            True,
-                            200
+                            False,
+                            10
                             )
-    iss.handler.data.print_trades()
+    """
+    """
+	#print( iss.get_session_start_end_tradenos( 'futures', 'forts', 'RIH8', 1 ) )
+    #iss.handler.data.print_trades()
+	iss.get_trades_for_session( 'futures', 'forts', 'RIH8', 3 )
+    iss.handler.data.store_trades()
+    """
+    #   To find a pass to a given secutity lool at the following links:
+    #	https://iss.moex.com/iss/engines/
+    #	http://iss.moex.com/iss/engines/currency/markets
+    #	https://iss.moex.com/iss/engines/currency/markets/selt/boards
+    #	https://iss.moex.com/iss/engines/currency/markets/selt/boards/CETS/securities
+    #	now the request is fulfilled:
+    #   https://iss.moex.com/iss/engines/currency/markets/selt/boards/CETS/securities/USD000000TOD/candleborders.json
+    #   last argument is a list of timeframes for which the query to be done
+    #   timeframe text code is one of: ( 'm1', 'm10', 'H1', 'D1', 'W1', 'M1', 'Q1' )
+
+    #borders = iss.get_security_candleborders( 'currency', 'selt', 'CETS', 'USD000000TOD', ( 'D1', 'H1', ) )
+    #print( borders )
+    #candles = iss.get_security_candles( 'currency', 'selt', 'CETS', 'USD000000TOD', '2010-04-10', '', 'm1' )
+    iss.save_security_candles( 'currency', 'selt', 'CETS', 'USD000000TOD', 'H1', time_bounds = ( '2011-12-15', '2019-04-01' ) )
+
+    #print( candles )
     
     #else:
     #    print( 'not real time' )

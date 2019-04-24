@@ -17,9 +17,12 @@ import time
 
 requests = {'history_secs': 'http://iss.moex.com/iss/history/engines/%(engine)s/markets/%(market)s/boards/%(board)s/securities.json?date=%(date)s',
             'sec_trades': 'https://iss.moex.com/iss/engines/%(engine)s/markets/%(market)s/securities/%(sec)s/trades.json?previous_session=%(previous_session)d&limit=%(limit)d&reversed=%(reversed)d',
-            'sec_trades1': 'https://iss.moex.com/iss/engines/%(engine)s/markets/%(market)s/securities/%(sec)s/trades.json?previous_session=%(previous_session)d&tradeno=%(tradeno)d&limit=%(limit)d'}
+            'sec_trades1': 'https://iss.moex.com/iss/engines/%(engine)s/markets/%(market)s/securities/%(sec)s/trades.json?previous_session=%(previous_session)d&tradeno=%(tradeno)d&limit=%(limit)d',
+	    'sec_candleborders': 'https://iss.moex.com/iss/engines/%(engine)s/markets/%(market)s/boards/%(board)s/securities/%(sec)s/candleborders.json',
+            'sec_candles': 'https://iss.moex.com/iss/engines/%(engine)s/markets/%(market)s/boards/%(board)s/securities/%(sec)s/candles.json?start=%(start)d&till=%(till)s&from=%(from)s&interval=%(interval)d&iss.reverse=%(reverse)s' }
 # futures, forts, RTSI, RIH8
 # http://iss.moex.com/iss/securities.xml?q=RI
+timeFrameCodes = { 'm1': 1, 'm10': 10, 'H1': 60, 'D1': 24, 'W1': 7, 'M1': 31, 'Q1': 4 }
 
 class Config:
     def __init__(self, user='', password='', proxy_url='', debug_level=0):
@@ -391,6 +394,201 @@ class MicexISSClient:
         self.handler.do( result )
         
         return True
+
+    def get_security_candleborders( self, engine, market, board, security, timeFrames ):
+        """ Get and parse historical data on all the securities at the
+        given engine, market, board
+        """
+        url = requests['sec_candleborders'] % {'engine': engine,
+                                               'market': market,
+                                               'board': board,
+                                               'sec': security }
+
+        #print(url)
+
+        res = self.opener.open( url )
+        resStr = str( res.read().decode('utf-8') )
+        #print( resStr )
+
+        jres = json.loads( resStr )
+
+        jdata_raw = jres['borders']
+        # node with actual data
+        jcols = jdata_raw['columns']
+        jdata = jdata_raw['data']
+
+        # node with the list of column IDs in 'data' in correct order;
+        # it's also possible to use the iss.json=extended argument instead
+        # to get all the IDs together with data (leads to more traffic)
+        #"begin", "end", "interval"
+        beginIdx = jcols.index('begin')
+        endIdx = jcols.index('end')
+        intervalIdx = jcols.index('interval')
+            
+
+        result = {}
+        _timeFrames = list( timeFrames )
+        for timeFrameData in jdata:
+            i = 0
+            while i < len( _timeFrames ):
+                if timeFrameData[ intervalIdx ] == timeFrameCodes[ _timeFrames[i] ]:
+                    result[ _timeFrames[i] ] = ( timeFrameData[ beginIdx ], timeFrameData[ endIdx ] )
+                    _timeFrames.pop(i)
+                    continue
+                i += 1
+        
+        return result
+
+    def get_security_candles( self, engine, market, board, security, dateFrom, dateTill, timeFrame, reverse = False ):
+ 
+        candlesRead = 0
+        candles = []
+
+        reqNo = 0
+        while True:
+            if reqNo % 10 == 0:
+                print( reqNo, end = ' ' )
+            url = requests['sec_candles'] % {'engine': engine,
+                                             'market': market,
+                                             'board': board,
+                                             'sec': security,
+                                             'till': dateTill,
+                                             'from': dateFrom,
+                                             'interval': timeFrameCodes[ timeFrame ],
+                                             'reverse': reverse,
+                                             'start': candlesRead }
+
+            reqNo += 1
+            #print(url)
+
+            res = self.opener.open( url )
+            resStr = str( res.read().decode('utf-8') )
+            #print( resStr )
+
+            jres = json.loads( resStr )
+
+            jdata_raw = jres['candles']
+            # node with actual data
+            jcols = jdata_raw['columns']
+            jdata = jdata_raw['data']
+
+            # node with the list of column IDs in 'data' in correct order;
+            # it's also possible to use the iss.json=extended argument instead
+            # to get all the IDs together with data (leads to more traffic)
+            #"open", "close", "high", "low", "value", "volume", "begin", "end"
+            openIdx = jcols.index('open')
+            closeIdx = jcols.index('close')
+            highIdx = jcols.index('high')
+            lowIdx = jcols.index('low')
+            valueIdx = jcols.index('value')
+            volumeIdx = jcols.index('volume')
+            beginIdx = jcols.index('begin')
+            endIdx = jcols.index('end')
+
+            dataChunk = []
+            for cd in jdata:
+                dataChunk.append( [ cd[ openIdx ], cd[ closeIdx ], cd[ highIdx ], cd[ lowIdx ],
+                                    cd[ valueIdx ], cd[ volumeIdx ], cd[ beginIdx ], cd[ endIdx ] ] )
+
+            if len( dataChunk ) == 0:
+                break
+            
+            candles += dataChunk
+            candlesRead += len( dataChunk )
+        print( '\n' )
+        
+        return candles
+
+    def save_security_candles( self, engine, market, board, security, timeFrame, **kwargs ):
+        if 'time_bounds' not in kwargs:
+            limits = self.get_security_candleborders( engine, market, board, security, ( 'm1', ) )
+
+            if 'm1' not in limits:
+                return
+
+            dateFrom = limits[ 'm1' ][0]
+            dateTill = limits[ 'm1' ][1]
+            dateFrom = dateFrom[ :dateFrom.find( ' ' ) ]
+            dateTill = dateTill[ :dateTill.find( ' ' ) ]
+        else:
+            dateFrom = kwargs[ 'time_bounds' ][ 0 ]
+            dateTill = kwargs[ 'time_bounds' ][ 1 ]
+
+        fnameOut = '%s.%s.%s.%s.txt' % ( security,
+                                     dateFrom,
+                                     dateTill,
+                                     timeFrame )
+
+        #print( fnameOut )
+
+        f = open( fnameOut, 'w' )
+
+        candlesRead = 0
+        #candles = []
+
+        reqNo = 0
+        while True:
+            if reqNo % 10 == 0:
+                print( reqNo, end = ' ' )
+            url = requests['sec_candles'] % {'engine': engine,
+                                             'market': market,
+                                             'board': board,
+                                             'sec': security,
+                                             'till': dateTill,
+                                             'from': dateFrom,
+                                             'interval': timeFrameCodes[ timeFrame ],
+                                             'reverse': False,
+                                             'start': candlesRead }
+
+            reqNo += 1
+            #print(url)
+
+            res = self.opener.open( url )
+            resStr = str( res.read().decode('utf-8') )
+            #print( resStr )
+
+            jres = json.loads( resStr )
+
+            jdata_raw = jres['candles']
+            # node with actual data
+            jcols = jdata_raw['columns']
+            jdata = jdata_raw['data']
+
+            # node with the list of column IDs in 'data' in correct order;
+            # it's also possible to use the iss.json=extended argument instead
+            # to get all the IDs together with data (leads to more traffic)
+            #"open", "close", "high", "low", "value", "volume", "begin", "end"
+            openIdx = jcols.index('open')
+            closeIdx = jcols.index('close')
+            highIdx = jcols.index('high')
+            lowIdx = jcols.index('low')
+            valueIdx = jcols.index('value')
+            volumeIdx = jcols.index('volume')
+            beginIdx = jcols.index('begin')
+            endIdx = jcols.index('end')
+
+            #dataChunk = []
+            dataChunkSize = 0
+            for cd in jdata:
+                #dataChunk.append( [ cd[ openIdx ], cd[ closeIdx ], cd[ highIdx ], cd[ lowIdx ],
+                #                    cd[ valueIdx ], cd[ volumeIdx ], cd[ beginIdx ], cd[ endIdx ] ] )
+                f.write( '%f\t%f\t%f\t%f\t%f\t%f\t%s\t%s\n' % ( cd[ openIdx ], cd[ closeIdx ], cd[ highIdx ], cd[ lowIdx ],
+                                                                cd[ valueIdx ], cd[ volumeIdx ], cd[ beginIdx ], cd[ endIdx ] ) )
+                dataChunkSize += 1
+
+            #if len( dataChunk ) == 0:
+            #    break
+            if dataChunkSize == 0:
+                break
+            
+            #candles += dataChunk
+            #candlesRead += len( dataChunk )
+            candlesRead += dataChunkSize
+        print( '\n' )
+
+        f.close()
+        
+        #print( candles )
 
 
 def del_null(num):
